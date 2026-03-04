@@ -3,9 +3,11 @@ import * as uuid from 'uuid'
 import * as avro from 'avsc'
 import * as zlib from 'zlib'
 import * as gluesdk from '@aws-sdk/client-glue'
+import Ajv, { ValidateFunction } from 'ajv'
 
 export enum SchemaType {
   AVRO = 'AVRO',
+  JSON = 'JSON',
 }
 export interface RegisterSchemaProps {
   type: SchemaType
@@ -30,6 +32,13 @@ export interface CreateSchemaProps {
 }
 export interface EncodeProps {
   compress: boolean
+}
+
+export interface CachedSchemaInfo {
+  type: SchemaType
+  avroType?: avro.Type
+  jsonSchema?: object
+  validator?: ValidateFunction
 }
 
 export enum ERROR {
@@ -101,12 +110,14 @@ export class GlueSchemaRegistry {
   private glueSchemaIdCache: {
     [hash: string]: string
   }
-  private avroSchemaCache: {
-    [key: string]: avro.Type
+  private schemaCache: {
+    [key: string]: CachedSchemaInfo
   }
 
   private runningGlueSchemaLoads = new Map<string, Promise<gluesdk.GetSchemaVersionResponse>>()
   private limiter: PromiseDispatcher
+  private ajv: Ajv
+  private consumerValidatorCache = new WeakMap<object, ValidateFunction>()
 
   /**
    * Constructs a GlueSchemaRegistry
@@ -119,8 +130,9 @@ export class GlueSchemaRegistry {
     this.gc = new gluesdk.GlueClient(props)
     this.registryName = registryName
     this.glueSchemaIdCache = {}
-    this.avroSchemaCache = {}
+    this.schemaCache = {}
     this.limiter = new PromiseDispatcher(Math.max(1, maxConcurrentGlueCalls))
+    this.ajv = new Ajv({ useDefaults: true, allErrors: true })
   }
 
   /**
@@ -205,9 +217,21 @@ export class GlueSchemaRegistry {
     if (!schema.SchemaVersionId) throw new Error('Schema does not have SchemaVersionId')
     if (schema.Status === 'FAILURE') throw new Error('Schema registration failure')
     this.glueSchemaIdCache[hashString] = schema.SchemaVersionId
-    // store the avro schema in its cache to avoid another glue lookup when it's used
-    const avroSchema = avro.Type.forSchema(JSON.parse(props.schema))
-    this.avroSchemaCache[schema.SchemaVersionId] = avroSchema
+    // store the schema in cache to avoid another glue lookup when it's used
+    if (props.type === SchemaType.JSON) {
+      const jsonSchema = JSON.parse(props.schema)
+      this.schemaCache[schema.SchemaVersionId] = {
+        type: SchemaType.JSON,
+        jsonSchema,
+        validator: this.ajv.compile(jsonSchema),
+      }
+    } else {
+      const avroSchema = avro.Type.forSchema(JSON.parse(props.schema))
+      this.schemaCache[schema.SchemaVersionId] = {
+        type: SchemaType.AVRO,
+        avroType: avroSchema,
+      }
+    }
     return schema.SchemaVersionId
   }
 
@@ -248,9 +272,24 @@ export class GlueSchemaRegistry {
       new Promise((resolve) => {
         resolve(buf)
       })
-    const schema = await this.getAvroSchemaForGlueId(glueSchemaId)
+    const schemaInfo = await this.getSchemaForGlueId(glueSchemaId)
     // construct the message binary
-    const buf = schema.toBuffer(object)
+    let buf: Buffer
+    if (schemaInfo.type === SchemaType.JSON) {
+      // Clone to avoid mutating the caller's object (ajv useDefaults modifies in place)
+      if (schemaInfo.validator) {
+        const clone = JSON.parse(JSON.stringify(object))
+        const valid = schemaInfo.validator(clone)
+        if (!valid) {
+          throw new Error(
+            `JSON Schema validation failed: ${this.ajv.errorsText(schemaInfo.validator.errors)}`,
+          )
+        }
+      }
+      buf = Buffer.from(JSON.stringify(object), 'utf-8')
+    } else {
+      buf = schemaInfo.avroType!.toBuffer(object)
+    }
     let compression_func = ZLIB_COMPRESS_FUNC
     let compressionbyte = GlueSchemaRegistry.COMPRESSION_ZLIB_BYTE
     if (props && !props.compress) {
@@ -328,10 +367,11 @@ export class GlueSchemaRegistry {
    * Decode a message with a specific schema.
    *
    * @param message - Buffer with the binary encoded message
-   * @param consumerschema - The Avro schema that should be used to decode the message
+   * @param consumerschema - The schema to decode with. For Avro messages, pass an avro.Type.
+   *   For JSON Schema messages, pass a JSON Schema object (optional — omit to skip consumer validation).
    * @returns - the deserialized message as object
    */
-  async decode<T>(message: Buffer, consumerschema: avro.Type): Promise<T> {
+  async decode<T>(message: Buffer, consumerschema?: avro.Type | object): Promise<T> {
     const headerversion = message.readInt8(0)
     const compression = message.readInt8(1)
     if (headerversion !== GlueSchemaRegistry.HEADER_VERSION) {
@@ -361,23 +401,64 @@ export class GlueSchemaRegistry {
         resolve(buf)
       })
     const producerSchemaId = uuid.stringify(message, 2)
-    const producerschema = await this.getAvroSchemaForGlueId(producerSchemaId)
-    const resolver = this.getResolver(producerschema, consumerschema)
+    const schemaInfo = await this.getSchemaForGlueId(producerSchemaId)
     const content = Buffer.from(message.subarray(18))
     let handlecompression = NO_UNCOMPRESS_FUNC
     if (compression === GlueSchemaRegistry.COMPRESSION_ZLIB) {
       handlecompression = ZLIB_UNCOMPRESS_FUNC
     }
-    return consumerschema.fromBuffer(await handlecompression(content), resolver)
+    const decompressed = await handlecompression(content)
+
+    if (schemaInfo.type === SchemaType.JSON) {
+      const data = JSON.parse(decompressed.toString('utf-8'))
+      if (consumerschema && !(consumerschema instanceof avro.Type)) {
+        // Validate with consumer JSON schema; useDefaults fills in defaults for schema evolution
+        const validate = this.getConsumerValidator(consumerschema)
+        validate(data)
+      }
+      return data as T
+    } else {
+      // Avro path requires an avro.Type consumer schema
+      if (!consumerschema || !(consumerschema instanceof avro.Type)) {
+        throw new Error('Avro decode requires an avro.Type consumer schema')
+      }
+      const resolver = this.getResolver(schemaInfo.avroType!, consumerschema)
+      return consumerschema.fromBuffer(decompressed, resolver)
+    }
   }
 
-  private async getAvroSchemaForGlueId(id: string) {
-    if (this.avroSchemaCache[id]) return this.avroSchemaCache[id]
-    const schemastring = (await this.loadGlueSchema(id)).SchemaDefinition
-    if (!schemastring) throw new Error('Glue returned undefined schema definition')
-    const schema = avro.Type.forSchema(JSON.parse(schemastring))
-    this.avroSchemaCache[id] = schema
-    return schema
+  private getConsumerValidator(schema: object): ValidateFunction {
+    const cached = this.consumerValidatorCache.get(schema)
+    if (cached) return cached
+    const validator = this.ajv.compile(schema)
+    this.consumerValidatorCache.set(schema, validator)
+    return validator
+  }
+
+  private async getSchemaForGlueId(id: string): Promise<CachedSchemaInfo> {
+    if (this.schemaCache[id]) return this.schemaCache[id]
+    const response = await this.loadGlueSchema(id)
+    if (!response.SchemaDefinition) throw new Error('Glue returned undefined schema definition')
+    const parsed = JSON.parse(response.SchemaDefinition)
+    // Determine schema type from Glue DataFormat, default to AVRO for backward compatibility
+    const dataFormat = response.DataFormat
+    if (dataFormat === 'JSON') {
+      const info: CachedSchemaInfo = {
+        type: SchemaType.JSON,
+        jsonSchema: parsed,
+        validator: this.ajv.compile(parsed),
+      }
+      this.schemaCache[id] = info
+      return info
+    } else {
+      const avroType = avro.Type.forSchema(parsed)
+      const info: CachedSchemaInfo = {
+        type: SchemaType.AVRO,
+        avroType,
+      }
+      this.schemaCache[id] = info
+      return info
+    }
   }
 
   private UUIDstringToByteArray(id: string) {

@@ -402,3 +402,199 @@ describe('test error cases', () => {
     }
   })
 })
+
+// --- JSON Schema Tests ---
+
+interface JsonTestType {
+  demo: string
+}
+
+interface JsonTestTypeV2 {
+  demo: string
+  v2demo: string
+}
+
+const jsonTestSchema = {
+  type: 'object',
+  properties: {
+    demo: { type: 'string', default: 'Hello World' },
+  },
+  required: ['demo'],
+  additionalProperties: false,
+}
+
+const jsonTestSchemaV2 = {
+  type: 'object',
+  properties: {
+    demo: { type: 'string', default: 'Hello World' },
+    v2demo: { type: 'string', default: 'Meinestadt' },
+  },
+  required: ['demo'],
+  additionalProperties: false,
+}
+
+describe('JSON Schema serde with compression', () => {
+  let schemaregistry: GlueSchemaRegistry
+  let schemaId: string
+
+  beforeEach(async () => {
+    schemaregistry = new GlueSchemaRegistry('testregistry', { region: 'eu-central-1' }, 1)
+    GlueClientMock.clear()
+  })
+
+  test('serialization roundtrip', async () => {
+    GlueClientMock.RegisterSchemaVersionCommand.mockResolvedValue({
+      VersionNumber: 1,
+      Status: 'AVAILABLE',
+      SchemaVersionId: 'b7912285-527d-42de-88ee-e389a763225f',
+      $metadata: { httpStatusCode: 200, requestId: '12345678901234567890123456789012' },
+    })
+    schemaId = await schemaregistry.register({
+      schema: JSON.stringify(jsonTestSchema),
+      schemaName: 'JsonTestschema',
+      type: SchemaType.JSON,
+    })
+    const bindata = await schemaregistry.encode(schemaId, { demo: 'Hello world!' })
+
+    expect(bindata.readInt8(0)).toBe(GlueSchemaRegistry.HEADER_VERSION)
+    expect(bindata.readInt8(1)).toBe(GlueSchemaRegistry.COMPRESSION_ZLIB)
+
+    const object = await schemaregistry.decode<JsonTestType>(bindata, jsonTestSchema)
+    expect(GlueClientMock.send).toHaveBeenCalledTimes(1)
+    expect(object.demo).toBe('Hello world!')
+  })
+
+  test('serialization without compression', async () => {
+    GlueClientMock.RegisterSchemaVersionCommand.mockResolvedValue({
+      VersionNumber: 1,
+      Status: 'AVAILABLE',
+      SchemaVersionId: 'b7912285-527d-42de-88ee-e389a763225f',
+      $metadata: { httpStatusCode: 200, requestId: '12345678901234567890123456789012' },
+    })
+    schemaId = await schemaregistry.register({
+      schema: JSON.stringify(jsonTestSchema),
+      schemaName: 'JsonTestschema',
+      type: SchemaType.JSON,
+    })
+    const bindata = await schemaregistry.encode(schemaId, { demo: 'Hello world!' }, { compress: false })
+
+    expect(bindata.readInt8(0)).toBe(GlueSchemaRegistry.HEADER_VERSION)
+    expect(bindata.readInt8(1)).toBe(GlueSchemaRegistry.COMPRESSION_DEFAULT)
+
+    const content = bindata.subarray(18).toString('utf-8')
+    expect(JSON.parse(content)).toEqual({ demo: 'Hello world!' })
+
+    const object = await schemaregistry.decode<JsonTestType>(bindata, jsonTestSchema)
+    expect(object.demo).toBe('Hello world!')
+  })
+
+  test('validation rejects invalid data on encode', async () => {
+    GlueClientMock.RegisterSchemaVersionCommand.mockResolvedValue({
+      VersionNumber: 1,
+      Status: 'AVAILABLE',
+      SchemaVersionId: 'b7912285-527d-42de-88ee-e389a763225f',
+      $metadata: { httpStatusCode: 200, requestId: '12345678901234567890123456789012' },
+    })
+    schemaId = await schemaregistry.register({
+      schema: JSON.stringify(jsonTestSchema),
+      schemaName: 'JsonTestschema',
+      type: SchemaType.JSON,
+    })
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await expect(schemaregistry.encode(schemaId, { demo: 123 } as any)).rejects.toThrow(
+      'JSON Schema validation failed',
+    )
+  })
+})
+
+describe('JSON Schema serde with schema evolution', () => {
+  let schemaregistry: GlueSchemaRegistry
+
+  beforeAll(async () => {
+    schemaregistry = new GlueSchemaRegistry('testregistry', { region: 'eu-central-1' })
+    GlueClientMock.reset()
+    GlueClientMock.RegisterSchemaVersionCommand.mockResolvedValue({
+      VersionNumber: 1,
+      Status: 'AVAILABLE',
+      SchemaVersionId: 'b7912285-527d-42de-88ee-e389a763225f',
+      $metadata: { httpStatusCode: 200, requestId: '12345678901234567890123456789012' },
+    })
+  })
+
+  beforeEach(async () => {
+    GlueClientMock.clear()
+  })
+
+  test('deserialization with consumer schema applies defaults', async () => {
+    const schemaId = await schemaregistry.register({
+      schema: JSON.stringify(jsonTestSchema),
+      schemaName: 'JsonTestschema',
+      type: SchemaType.JSON,
+    })
+    const bindata = await schemaregistry.encode(schemaId, { demo: 'Hello world!' })
+    const object = await schemaregistry.decode<JsonTestTypeV2>(bindata, jsonTestSchemaV2)
+    expect(object.demo).toBe('Hello world!')
+    expect(object.v2demo).toBe('Meinestadt')
+  })
+
+  test('deserialization without consumer schema', async () => {
+    const schemaId = await schemaregistry.register({
+      schema: JSON.stringify(jsonTestSchema),
+      schemaName: 'JsonTestschema',
+      type: SchemaType.JSON,
+    })
+    const bindata = await schemaregistry.encode(schemaId, { demo: 'Hello world!' })
+    const object = await schemaregistry.decode<JsonTestType>(bindata)
+    expect(object.demo).toBe('Hello world!')
+  })
+})
+
+describe('JSON Schema decode from Glue registry', () => {
+  let encodedMessage: Buffer
+
+  beforeAll(async () => {
+    GlueClientMock.reset()
+    GlueClientMock.RegisterSchemaVersionCommand.mockResolvedValue({
+      VersionNumber: 1,
+      Status: 'AVAILABLE',
+      SchemaVersionId: 'b7912285-527d-42de-88ee-e389a763225f',
+      $metadata: { httpStatusCode: 200, requestId: '12345678901234567890123456789012' },
+    })
+    const encoder = new GlueSchemaRegistry('testregistry', { region: 'eu-central-1' })
+    const schemaId = await encoder.register({
+      schema: JSON.stringify(jsonTestSchema),
+      schemaName: 'JsonTestschema',
+      type: SchemaType.JSON,
+    })
+    encodedMessage = await encoder.encode(schemaId, { demo: 'Hello world!' })
+  })
+
+  beforeEach(async () => {
+    GlueClientMock.reset()
+    GlueClientMock.clear()
+    GlueClientMock.GetSchemaVersionCommand.mockResolvedValue({
+      VersionNumber: 1,
+      Status: 'AVAILABLE',
+      DataFormat: 'JSON',
+      $metadata: { httpStatusCode: 200, requestId: '12345678901234567890123456789012' },
+      SchemaVersionId: 'b7912285-527d-42de-88ee-e389a763225f',
+      SchemaArn: 'arn:aws:glue:eu-central-1:123456789012:schema/testregistry/JsonTestschema',
+      SchemaDefinition: JSON.stringify(jsonTestSchema),
+    })
+  })
+
+  test('decode fetches JSON schema from Glue and deserializes', async () => {
+    const decoder = new GlueSchemaRegistry('testregistry', { region: 'eu-central-1' })
+    const result = await decoder.decode<JsonTestType>(encodedMessage, jsonTestSchema)
+    expect(result.demo).toBe('Hello world!')
+    expect(GlueClientMock.GetSchemaVersionCommand).toHaveBeenCalledTimes(1)
+    expect(GlueClientMock.send).toHaveBeenCalledTimes(1)
+  })
+
+  test('decode with schema evolution from Glue', async () => {
+    const decoder = new GlueSchemaRegistry('testregistry', { region: 'eu-central-1' })
+    const result = await decoder.decode<JsonTestTypeV2>(encodedMessage, jsonTestSchemaV2)
+    expect(result.demo).toBe('Hello world!')
+    expect(result.v2demo).toBe('Meinestadt')
+  })
+})
