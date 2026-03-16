@@ -597,4 +597,21 @@ describe('JSON Schema decode from Glue registry', () => {
     expect(result.demo).toBe('Hello world!')
     expect(result.v2demo).toBe('Meinestadt')
   })
+
+  test('decode rejects data incompatible with consumer schema', async () => {
+    const decoder = new GlueSchemaRegistry('testregistry', { region: 'eu-central-1' })
+    const strictConsumerSchema = {
+      type: 'object',
+      properties: {
+        demo: { type: 'string' },
+        v2demo: { type: 'string' },
+      },
+      required: ['demo', 'v2demo'],
+      additionalProperties: false,
+    }
+    await expect(
+      decoder.decode<JsonTestTypeV2>(encodedMessage, strictConsumerSchema),
+    ).rejects.toThrow('JSON Schema validation failed')
+    expect(GlueClientMock.GetSchemaVersionCommand).toHaveBeenCalledTimes(1)
+  })
 })
