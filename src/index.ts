@@ -277,16 +277,16 @@ export class GlueSchemaRegistry {
     let buf: Buffer
     if (schemaInfo.type === SchemaType.JSON) {
       // Clone to avoid mutating the caller's object (ajv useDefaults modifies in place)
+      const payload = JSON.parse(JSON.stringify(object))
       if (schemaInfo.validator) {
-        const clone = JSON.parse(JSON.stringify(object))
-        const valid = schemaInfo.validator(clone)
+        const valid = schemaInfo.validator(payload)
         if (!valid) {
           throw new Error(
             `JSON Schema validation failed: ${this.ajv.errorsText(schemaInfo.validator.errors)}`,
           )
         }
       }
-      buf = Buffer.from(JSON.stringify(object), 'utf-8')
+      buf = Buffer.from(JSON.stringify(payload), 'utf-8')
     } else {
       buf = schemaInfo.avroType!.toBuffer(object)
     }
@@ -414,7 +414,10 @@ export class GlueSchemaRegistry {
       if (consumerschema && !(consumerschema instanceof avro.Type)) {
         // Validate with consumer JSON schema; useDefaults fills in defaults for schema evolution
         const validate = this.getConsumerValidator(consumerschema)
-        validate(data)
+        const valid = validate(data)
+        if (!valid) {
+          throw new Error(`JSON Schema validation failed: ${this.ajv.errorsText(validate.errors)}`)
+        }
       }
       return data as T
     } else {
