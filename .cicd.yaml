@@ -1,0 +1,10 @@
+---
+application:
+  labels:
+    application: glue-schema-registry
+    owner: infra
+    type: library
+
+nodejs:
+  packageManager: npm
+  version: 22

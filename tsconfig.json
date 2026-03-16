@@ -6,6 +6,7 @@
       "es2019", "es2020.promise", "es2020.bigint", "es2020.string"
     ],
     "outDir": "./dist",
+    "rootDir": "src",
     "declaration": true,
     "strict": true,
     "noImplicitAny": true,
@@ -26,8 +27,12 @@
     "strictPropertyInitialization": false,
     "typeRoots": [
       "./node_modules/@types"
-    ]
-  },  
+    ],
+    "paths": {
+      "@drumwave/glue-schema-registry": ["./src"],
+      "@/*": ["./src/*"]
+    }
+  },
   "exclude": [
     "node_modules",
     "cdk.out",
