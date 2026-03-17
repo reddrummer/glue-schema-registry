@@ -117,6 +117,7 @@ export class GlueSchemaRegistry {
   private runningGlueSchemaLoads = new Map<string, Promise<gluesdk.GetSchemaVersionResponse>>()
   private limiter: PromiseDispatcher
   private ajv: Ajv
+  private consumerAjv: Ajv
   private consumerValidatorCache = new WeakMap<object, ValidateFunction>()
 
   /**
@@ -133,6 +134,7 @@ export class GlueSchemaRegistry {
     this.schemaCache = {}
     this.limiter = new PromiseDispatcher(Math.max(1, maxConcurrentGlueCalls))
     this.ajv = new Ajv({ useDefaults: true, allErrors: true })
+    this.consumerAjv = new Ajv({ useDefaults: true, allErrors: true })
   }
 
   /**
@@ -416,7 +418,7 @@ export class GlueSchemaRegistry {
         const validate = this.getConsumerValidator(consumerschema)
         const valid = validate(data)
         if (!valid) {
-          throw new Error(`JSON Schema validation failed: ${this.ajv.errorsText(validate.errors)}`)
+          throw new Error(`JSON Schema validation failed: ${this.consumerAjv.errorsText(validate.errors)}`)
         }
       }
       return data as T
@@ -433,7 +435,7 @@ export class GlueSchemaRegistry {
   private getConsumerValidator(schema: object): ValidateFunction {
     const cached = this.consumerValidatorCache.get(schema)
     if (cached) return cached
-    const validator = this.ajv.compile(schema)
+    const validator = this.consumerAjv.compile(schema)
     this.consumerValidatorCache.set(schema, validator)
     return validator
   }
