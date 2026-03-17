@@ -74,6 +74,59 @@ describe('schema management', () => {
   })
 })
 
+describe('coverage regression tests for index.ts', () => {
+  beforeEach(async () => {
+    GlueClientMock.reset()
+    GlueClientMock.clear()
+  })
+
+  test('updateGlueClient replaces underlying client', async () => {
+    const callsBeforeUpdate = GlueClientMock.GlueClient.mock.calls.length
+    const schemaregistry = new GlueSchemaRegistry('testregistry', {
+      region: 'eu-central-1',
+    })
+    const callsAfterConstruct = GlueClientMock.GlueClient.mock.calls.length
+    expect(callsAfterConstruct).toBe(callsBeforeUpdate + 1)
+    schemaregistry.updateGlueClient({
+      region: 'eu-west-1',
+    })
+    expect(GlueClientMock.GlueClient.mock.calls.length).toBe(callsAfterConstruct + 1)
+  })
+
+  test('analyze returns invalid schema id when payload is too short for uuid', async () => {
+    const schemaregistry = new GlueSchemaRegistry('testregistry', {
+      region: 'eu-central-1',
+    })
+    const tooShortMessage = Buffer.from([GlueSchemaRegistry.HEADER_VERSION, 0])
+    const result = await schemaregistry.analyzeMessage(tooShortMessage)
+    expect(result.valid).toBe(false)
+    expect(result.error).toBe(ERROR.INVALID_SCHEMA_ID)
+  })
+
+  test('decode throws when Avro payload has no avro.Type consumer schema', async () => {
+    const schemaregistry = new GlueSchemaRegistry('testregistry', {
+      region: 'eu-central-1',
+    })
+    GlueClientMock.GetSchemaVersionCommand.mockResolvedValue({
+      VersionNumber: 1,
+      Status: 'AVAILABLE',
+      DataFormat: 'AVRO',
+      $metadata: {
+        httpStatusCode: 200,
+        requestId: '12345678901234567890123456789012',
+      },
+      SchemaVersionId: 'b7912285-527d-42de-88ee-e389a763225f',
+      SchemaArn: 'arn:aws:glue:eu-central-1:123456789012:schema/testregistry/Testschema',
+      SchemaDefinition: JSON.stringify(testschema),
+    })
+
+    await expect(
+      schemaregistry.decode<TestType>(Buffer.from(compressedHelloWorld, 'hex')),
+    ).rejects.toThrow('Avro decode requires an avro.Type consumer schema')
+  })
+
+})
+
 describe('serde with compression', () => {
   let schemaregistry: GlueSchemaRegistry
   let schemaId: string
@@ -400,5 +453,300 @@ describe('test error cases', () => {
     } catch (error: any) {
       expect(error.message).toMatch('Only compression type 0 and 5 are supported, received 1')
     }
+  })
+})
+
+// --- JSON Schema Tests ---
+
+// Schema with $id used for the concurrent-decode race condition test.
+// Defined at module scope so the same object reference is reused across
+// beforeAll / test, keeping the WeakMap-based consumerValidatorCache working.
+const jsonSchemaWithId = {
+  $id: 'https://example.com/concurrent-test-schema',
+  type: 'object',
+  properties: {
+    demo: { type: 'string' },
+  },
+  required: ['demo'],
+  additionalProperties: false,
+}
+
+interface JsonTestType {
+  demo: string
+}
+
+interface JsonTestTypeV2 {
+  demo: string
+  v2demo: string
+}
+
+const jsonTestSchema = {
+  type: 'object',
+  properties: {
+    demo: { type: 'string', default: 'Hello World' },
+  },
+  required: ['demo'],
+  additionalProperties: false,
+}
+
+const jsonTestSchemaV2 = {
+  type: 'object',
+  properties: {
+    demo: { type: 'string', default: 'Hello World' },
+    v2demo: { type: 'string', default: 'Meinestadt' },
+  },
+  required: ['demo'],
+  additionalProperties: false,
+}
+
+describe('JSON Schema serde with compression', () => {
+  let schemaregistry: GlueSchemaRegistry
+  let schemaId: string
+
+  beforeEach(async () => {
+    schemaregistry = new GlueSchemaRegistry('testregistry', { region: 'eu-central-1' }, 1)
+    GlueClientMock.clear()
+  })
+
+  test('serialization roundtrip', async () => {
+    GlueClientMock.RegisterSchemaVersionCommand.mockResolvedValue({
+      VersionNumber: 1,
+      Status: 'AVAILABLE',
+      SchemaVersionId: 'b7912285-527d-42de-88ee-e389a763225f',
+      $metadata: { httpStatusCode: 200, requestId: '12345678901234567890123456789012' },
+    })
+    schemaId = await schemaregistry.register({
+      schema: JSON.stringify(jsonTestSchema),
+      schemaName: 'JsonTestschema',
+      type: SchemaType.JSON,
+    })
+    const bindata = await schemaregistry.encode(schemaId, { demo: 'Hello world!' })
+
+    expect(bindata.readInt8(0)).toBe(GlueSchemaRegistry.HEADER_VERSION)
+    expect(bindata.readInt8(1)).toBe(GlueSchemaRegistry.COMPRESSION_ZLIB)
+
+    const object = await schemaregistry.decode<JsonTestType>(bindata, jsonTestSchema)
+    expect(GlueClientMock.send).toHaveBeenCalledTimes(1)
+    expect(object.demo).toBe('Hello world!')
+  })
+
+  test('serialization without compression', async () => {
+    GlueClientMock.RegisterSchemaVersionCommand.mockResolvedValue({
+      VersionNumber: 1,
+      Status: 'AVAILABLE',
+      SchemaVersionId: 'b7912285-527d-42de-88ee-e389a763225f',
+      $metadata: { httpStatusCode: 200, requestId: '12345678901234567890123456789012' },
+    })
+    schemaId = await schemaregistry.register({
+      schema: JSON.stringify(jsonTestSchema),
+      schemaName: 'JsonTestschema',
+      type: SchemaType.JSON,
+    })
+    const bindata = await schemaregistry.encode(schemaId, { demo: 'Hello world!' }, { compress: false })
+
+    expect(bindata.readInt8(0)).toBe(GlueSchemaRegistry.HEADER_VERSION)
+    expect(bindata.readInt8(1)).toBe(GlueSchemaRegistry.COMPRESSION_DEFAULT)
+
+    const content = bindata.subarray(18).toString('utf-8')
+    expect(JSON.parse(content)).toEqual({ demo: 'Hello world!' })
+
+    const object = await schemaregistry.decode<JsonTestType>(bindata, jsonTestSchema)
+    expect(object.demo).toBe('Hello world!')
+  })
+
+  test('validation rejects invalid data on encode', async () => {
+    GlueClientMock.RegisterSchemaVersionCommand.mockResolvedValue({
+      VersionNumber: 1,
+      Status: 'AVAILABLE',
+      SchemaVersionId: 'b7912285-527d-42de-88ee-e389a763225f',
+      $metadata: { httpStatusCode: 200, requestId: '12345678901234567890123456789012' },
+    })
+    schemaId = await schemaregistry.register({
+      schema: JSON.stringify(jsonTestSchema),
+      schemaName: 'JsonTestschema',
+      type: SchemaType.JSON,
+    })
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await expect(schemaregistry.encode(schemaId, { demo: 123 } as any)).rejects.toThrow(
+      'JSON Schema validation failed',
+    )
+  })
+})
+
+describe('JSON Schema serde with schema evolution', () => {
+  let schemaregistry: GlueSchemaRegistry
+
+  beforeAll(async () => {
+    schemaregistry = new GlueSchemaRegistry('testregistry', { region: 'eu-central-1' })
+    GlueClientMock.reset()
+    GlueClientMock.RegisterSchemaVersionCommand.mockResolvedValue({
+      VersionNumber: 1,
+      Status: 'AVAILABLE',
+      SchemaVersionId: 'b7912285-527d-42de-88ee-e389a763225f',
+      $metadata: { httpStatusCode: 200, requestId: '12345678901234567890123456789012' },
+    })
+  })
+
+  beforeEach(async () => {
+    GlueClientMock.clear()
+  })
+
+  test('deserialization with consumer schema applies defaults', async () => {
+    const schemaId = await schemaregistry.register({
+      schema: JSON.stringify(jsonTestSchema),
+      schemaName: 'JsonTestschema',
+      type: SchemaType.JSON,
+    })
+    const bindata = await schemaregistry.encode(schemaId, { demo: 'Hello world!' })
+    const object = await schemaregistry.decode<JsonTestTypeV2>(bindata, jsonTestSchemaV2)
+    expect(object.demo).toBe('Hello world!')
+    expect(object.v2demo).toBe('Meinestadt')
+  })
+
+  test('deserialization without consumer schema', async () => {
+    const schemaId = await schemaregistry.register({
+      schema: JSON.stringify(jsonTestSchema),
+      schemaName: 'JsonTestschema',
+      type: SchemaType.JSON,
+    })
+    const bindata = await schemaregistry.encode(schemaId, { demo: 'Hello world!' })
+    const object = await schemaregistry.decode<JsonTestType>(bindata)
+    expect(object.demo).toBe('Hello world!')
+  })
+})
+
+describe('JSON Schema decode from Glue registry', () => {
+  let encodedMessage: Buffer
+
+  beforeAll(async () => {
+    GlueClientMock.reset()
+    GlueClientMock.RegisterSchemaVersionCommand.mockResolvedValue({
+      VersionNumber: 1,
+      Status: 'AVAILABLE',
+      SchemaVersionId: 'b7912285-527d-42de-88ee-e389a763225f',
+      $metadata: { httpStatusCode: 200, requestId: '12345678901234567890123456789012' },
+    })
+    const encoder = new GlueSchemaRegistry('testregistry', { region: 'eu-central-1' })
+    const schemaId = await encoder.register({
+      schema: JSON.stringify(jsonTestSchema),
+      schemaName: 'JsonTestschema',
+      type: SchemaType.JSON,
+    })
+    encodedMessage = await encoder.encode(schemaId, { demo: 'Hello world!' })
+  })
+
+  beforeEach(async () => {
+    GlueClientMock.reset()
+    GlueClientMock.clear()
+    GlueClientMock.GetSchemaVersionCommand.mockResolvedValue({
+      VersionNumber: 1,
+      Status: 'AVAILABLE',
+      DataFormat: 'JSON',
+      $metadata: { httpStatusCode: 200, requestId: '12345678901234567890123456789012' },
+      SchemaVersionId: 'b7912285-527d-42de-88ee-e389a763225f',
+      SchemaArn: 'arn:aws:glue:eu-central-1:123456789012:schema/testregistry/JsonTestschema',
+      SchemaDefinition: JSON.stringify(jsonTestSchema),
+    })
+  })
+
+  test('decode fetches JSON schema from Glue and deserializes', async () => {
+    const decoder = new GlueSchemaRegistry('testregistry', { region: 'eu-central-1' })
+    const result = await decoder.decode<JsonTestType>(encodedMessage, jsonTestSchema)
+    expect(result.demo).toBe('Hello world!')
+    expect(GlueClientMock.GetSchemaVersionCommand).toHaveBeenCalledTimes(1)
+    expect(GlueClientMock.send).toHaveBeenCalledTimes(1)
+  })
+
+  test('decode with schema evolution from Glue', async () => {
+    const decoder = new GlueSchemaRegistry('testregistry', { region: 'eu-central-1' })
+    const result = await decoder.decode<JsonTestTypeV2>(encodedMessage, jsonTestSchemaV2)
+    expect(result.demo).toBe('Hello world!')
+    expect(result.v2demo).toBe('Meinestadt')
+  })
+
+  test('decode rejects data incompatible with consumer schema', async () => {
+    const decoder = new GlueSchemaRegistry('testregistry', { region: 'eu-central-1' })
+    const strictConsumerSchema = {
+      type: 'object',
+      properties: {
+        demo: { type: 'string' },
+        v2demo: { type: 'string' },
+      },
+      required: ['demo', 'v2demo'],
+      additionalProperties: false,
+    }
+    await expect(
+      decoder.decode<JsonTestTypeV2>(encodedMessage, strictConsumerSchema),
+    ).rejects.toThrow('JSON Schema validation failed')
+    expect(GlueClientMock.GetSchemaVersionCommand).toHaveBeenCalledTimes(1)
+  })
+
+  test('decode throws when avro.Type consumer schema is passed for a JSON message', async () => {
+    const decoder = new GlueSchemaRegistry('testregistry', { region: 'eu-central-1' })
+    await expect(
+      decoder.decode<JsonTestType>(encodedMessage, testschema),
+    ).rejects.toThrow('JSON decode requires a JSON Schema consumer, not an avro.Type')
+    expect(GlueClientMock.GetSchemaVersionCommand).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('JSON Schema concurrent decode with $id (race condition guard)', () => {
+  // getSchemaForGlueId re-checks schemaCache after awaiting loadGlueSchema.
+  //
+  // Why: loadGlueSchema deduplicates in-flight Glue requests via
+  // runningGlueSchemaLoads — all concurrent callers share the same Promise.
+  // When it resolves, every caller resumes in the microtask queue. Without
+  // the re-check, each caller would call ajv.compile(parsed) on its own
+  // JSON.parse'd copy of the schema. Ajv registers schemas by $id in an
+  // internal store; the second compile of a schema carrying $id throws:
+  //   "schema with key or id '...' already exists"
+  // The re-check ensures only the first caller to resume compiles and caches
+  // the schema; subsequent callers hit the cache and skip compilation.
+  let encodedMessage: Buffer
+
+  beforeAll(async () => {
+    GlueClientMock.reset()
+    GlueClientMock.RegisterSchemaVersionCommand.mockResolvedValue({
+      VersionNumber: 1,
+      Status: 'AVAILABLE',
+      SchemaVersionId: 'c8912285-527d-42de-88ee-e389a763225f',
+      $metadata: { httpStatusCode: 200, requestId: '12345678901234567890123456789012' },
+    })
+    const encoder = new GlueSchemaRegistry('testregistry', { region: 'eu-central-1' })
+    const schemaId = await encoder.register({
+      schema: JSON.stringify(jsonSchemaWithId),
+      schemaName: 'JsonSchemaWithId',
+      type: SchemaType.JSON,
+    })
+    encodedMessage = await encoder.encode(schemaId, { demo: 'Hello world!' })
+  })
+
+  test('concurrent decodes of a $id schema do not throw duplicate-id errors', async () => {
+    GlueClientMock.reset()
+    GlueClientMock.clear()
+    GlueClientMock.GetSchemaVersionCommand.mockResolvedValue({
+      VersionNumber: 1,
+      Status: 'AVAILABLE',
+      DataFormat: 'JSON',
+      $metadata: { httpStatusCode: 200, requestId: '12345678901234567890123456789012' },
+      SchemaVersionId: 'c8912285-527d-42de-88ee-e389a763225f',
+      SchemaArn: 'arn:aws:glue:eu-central-1:123456789012:schema/testregistry/JsonSchemaWithId',
+      SchemaDefinition: JSON.stringify(jsonSchemaWithId),
+    })
+
+    // Fresh registry — no cached schema — so the Glue fetch is triggered.
+    // All decode calls are created synchronously before the mock's setTimeout
+    // fires, so every caller reaches `await loadGlueSchema` while the single
+    // shared Promise is still pending and shares it via runningGlueSchemaLoads.
+    const decoder = new GlueSchemaRegistry('testregistry', { region: 'eu-central-1' }, 1)
+    const results = await Promise.all(
+      Array.from({ length: 10 }, () => decoder.decode<JsonTestType>(encodedMessage)),
+    )
+
+    expect(results).toHaveLength(10)
+    results.forEach((r) => expect(r.demo).toBe('Hello world!'))
+    // Confirm only one Glue call was made despite 10 concurrent requests
+    expect(GlueClientMock.GetSchemaVersionCommand).toHaveBeenCalledTimes(1)
+    expect(GlueClientMock.send).toHaveBeenCalledTimes(1)
   })
 })

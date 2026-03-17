@@ -1,30 +1,40 @@
 {
-  "name": "@meinestadt.de/glue-schema-registry",
+  "name": "@drumwave/glue-schema-registry",
   "version": "4.0.0",
-  "description": "This is a SerDe library to interact with the AWS Glue Schema Registry. It makes it easy to encode and decode messages with Avro schemas and the AWS' wire format.",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
-  "files": [
-    "dist"
-  ],
+  "description": "SerDe library to interact with the AWS Glue Schema Registry. Encode and decode messages with Avro and JSON schema using the AWS wire format.",
+  "author": "Drumwave",
+  "private": false,
+  "license": "MIT",
+  "main": "dist/cjs/index.js",
+  "module": "dist/esm/index.js",
+  "types": "dist/cjs/index.d.ts",
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "require": "./dist/index.js",
-      "import": "./dist/index.js"
+      "types": "./dist/cjs/index.d.ts",
+      "import": "./dist/esm/index.js",
+      "require": "./dist/cjs/index.js",
+      "default": "./dist/esm/index.js"
     }
   },
   "scripts": {
-    "build": "tsc",
+    "clean": "rm -rf dist",
+    "prepare": "npm run build",
+    "prebuild": "npm run clean",
+    "build:cjs": "tsc -p tsconfig.cjs.json",
+    "build:esm": "tsc -p tsconfig.esm.json && node -e \"require('fs').writeFileSync('dist/esm/package.json', JSON.stringify({ type: 'module' }, null, 2))\"",
+    "build": "npm run build:cjs && npm run build:esm",
     "lint": "eslint \"src/**/*.ts\" \"test/**/*.ts\"",
     "test": "jest",
     "prettier": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "coverage": "jest --coverage"
   },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/meinestadt/glue-schema-registry.git"
-  },
+  "files": [
+    "dist/",
+    "README.md"
+  ],
   "keywords": [
     "glue",
     "MSK",
@@ -33,15 +43,6 @@
     "registry",
     "avro"
   ],
-  "author": "Meinestadt GmbH",
-  "license": "MIT",
-  "bugs": {
-    "url": "https://github.com/meinestadt/glue-schema-registry/issues"
-  },
-  "homepage": "https://github.com/meinestadt/glue-schema-registry#readme",
-  "engines": {
-    "node": ">=18"
-  },
   "devDependencies": {
     "@jest/globals": "^30.2.0",
     "@types/node": "^25.0.3",
@@ -59,6 +60,7 @@
   },
   "dependencies": {
     "@aws-sdk/client-glue": "^3.298.0",
+    "ajv": "^8.18.0",
     "avsc": "^5.7.7",
     "uuid": "^11.0.5"
   }
