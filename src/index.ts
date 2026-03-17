@@ -421,7 +421,10 @@ export class GlueSchemaRegistry {
           )
         }
       }
-      if (consumerschema && !(consumerschema instanceof avro.Type)) {
+      if (consumerschema) {
+        if (consumerschema instanceof avro.Type) {
+          throw new Error('JSON decode requires a JSON Schema consumer, not an avro.Type')
+        }
         // Validate with consumer JSON schema; useDefaults fills in defaults for schema evolution
         const validate = this.getConsumerValidator(consumerschema)
         const valid = validate(data)

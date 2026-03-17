@@ -680,6 +680,14 @@ describe('JSON Schema decode from Glue registry', () => {
     ).rejects.toThrow('JSON Schema validation failed')
     expect(GlueClientMock.GetSchemaVersionCommand).toHaveBeenCalledTimes(1)
   })
+
+  test('decode throws when avro.Type consumer schema is passed for a JSON message', async () => {
+    const decoder = new GlueSchemaRegistry('testregistry', { region: 'eu-central-1' })
+    await expect(
+      decoder.decode<JsonTestType>(encodedMessage, testschema),
+    ).rejects.toThrow('JSON decode requires a JSON Schema consumer, not an avro.Type')
+    expect(GlueClientMock.GetSchemaVersionCommand).toHaveBeenCalledTimes(1)
+  })
 })
 
 describe('JSON Schema concurrent decode with $id (race condition guard)', () => {
