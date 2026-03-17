@@ -74,6 +74,59 @@ describe('schema management', () => {
   })
 })
 
+describe('coverage regression tests for index.ts', () => {
+  beforeEach(async () => {
+    GlueClientMock.reset()
+    GlueClientMock.clear()
+  })
+
+  test('updateGlueClient replaces underlying client', async () => {
+    const callsBeforeUpdate = GlueClientMock.GlueClient.mock.calls.length
+    const schemaregistry = new GlueSchemaRegistry('testregistry', {
+      region: 'eu-central-1',
+    })
+    const callsAfterConstruct = GlueClientMock.GlueClient.mock.calls.length
+    expect(callsAfterConstruct).toBe(callsBeforeUpdate + 1)
+    schemaregistry.updateGlueClient({
+      region: 'eu-west-1',
+    })
+    expect(GlueClientMock.GlueClient.mock.calls.length).toBe(callsAfterConstruct + 1)
+  })
+
+  test('analyze returns invalid schema id when payload is too short for uuid', async () => {
+    const schemaregistry = new GlueSchemaRegistry('testregistry', {
+      region: 'eu-central-1',
+    })
+    const tooShortMessage = Buffer.from([GlueSchemaRegistry.HEADER_VERSION, 0])
+    const result = await schemaregistry.analyzeMessage(tooShortMessage)
+    expect(result.valid).toBe(false)
+    expect(result.error).toBe(ERROR.INVALID_SCHEMA_ID)
+  })
+
+  test('decode throws when Avro payload has no avro.Type consumer schema', async () => {
+    const schemaregistry = new GlueSchemaRegistry('testregistry', {
+      region: 'eu-central-1',
+    })
+    GlueClientMock.GetSchemaVersionCommand.mockResolvedValue({
+      VersionNumber: 1,
+      Status: 'AVAILABLE',
+      DataFormat: 'AVRO',
+      $metadata: {
+        httpStatusCode: 200,
+        requestId: '12345678901234567890123456789012',
+      },
+      SchemaVersionId: 'b7912285-527d-42de-88ee-e389a763225f',
+      SchemaArn: 'arn:aws:glue:eu-central-1:123456789012:schema/testregistry/Testschema',
+      SchemaDefinition: JSON.stringify(testschema),
+    })
+
+    await expect(
+      schemaregistry.decode<TestType>(Buffer.from(compressedHelloWorld, 'hex')),
+    ).rejects.toThrow('Avro decode requires an avro.Type consumer schema')
+  })
+
+})
+
 describe('serde with compression', () => {
   let schemaregistry: GlueSchemaRegistry
   let schemaId: string
