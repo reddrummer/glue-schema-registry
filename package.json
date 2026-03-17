@@ -20,7 +20,9 @@
     }
   },
   "scripts": {
+    "clean": "rm -rf dist",
     "prepare": "npm run build",
+    "prebuild": "npm run clean",
     "build:cjs": "tsc -p tsconfig.cjs.json",
     "build:esm": "tsc -p tsconfig.esm.json && node -e \"require('fs').writeFileSync('dist/esm/package.json', JSON.stringify({ type: 'module' }, null, 2))\"",
     "build": "npm run build:cjs && npm run build:esm",
