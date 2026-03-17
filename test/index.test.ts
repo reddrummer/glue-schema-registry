@@ -405,6 +405,19 @@ describe('test error cases', () => {
 
 // --- JSON Schema Tests ---
 
+// Schema with $id used for the concurrent-decode race condition test.
+// Defined at module scope so the same object reference is reused across
+// beforeAll / test, keeping the WeakMap-based consumerValidatorCache working.
+const jsonSchemaWithId = {
+  $id: 'https://example.com/concurrent-test-schema',
+  type: 'object',
+  properties: {
+    demo: { type: 'string' },
+  },
+  required: ['demo'],
+  additionalProperties: false,
+}
+
 interface JsonTestType {
   demo: string
 }
@@ -613,5 +626,66 @@ describe('JSON Schema decode from Glue registry', () => {
       decoder.decode<JsonTestTypeV2>(encodedMessage, strictConsumerSchema),
     ).rejects.toThrow('JSON Schema validation failed')
     expect(GlueClientMock.GetSchemaVersionCommand).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('JSON Schema concurrent decode with $id (race condition guard)', () => {
+  // getSchemaForGlueId re-checks schemaCache after awaiting loadGlueSchema.
+  //
+  // Why: loadGlueSchema deduplicates in-flight Glue requests via
+  // runningGlueSchemaLoads — all concurrent callers share the same Promise.
+  // When it resolves, every caller resumes in the microtask queue. Without
+  // the re-check, each caller would call ajv.compile(parsed) on its own
+  // JSON.parse'd copy of the schema. Ajv registers schemas by $id in an
+  // internal store; the second compile of a schema carrying $id throws:
+  //   "schema with key or id '...' already exists"
+  // The re-check ensures only the first caller to resume compiles and caches
+  // the schema; subsequent callers hit the cache and skip compilation.
+  let encodedMessage: Buffer
+
+  beforeAll(async () => {
+    GlueClientMock.reset()
+    GlueClientMock.RegisterSchemaVersionCommand.mockResolvedValue({
+      VersionNumber: 1,
+      Status: 'AVAILABLE',
+      SchemaVersionId: 'c8912285-527d-42de-88ee-e389a763225f',
+      $metadata: { httpStatusCode: 200, requestId: '12345678901234567890123456789012' },
+    })
+    const encoder = new GlueSchemaRegistry('testregistry', { region: 'eu-central-1' })
+    const schemaId = await encoder.register({
+      schema: JSON.stringify(jsonSchemaWithId),
+      schemaName: 'JsonSchemaWithId',
+      type: SchemaType.JSON,
+    })
+    encodedMessage = await encoder.encode(schemaId, { demo: 'Hello world!' })
+  })
+
+  test('concurrent decodes of a $id schema do not throw duplicate-id errors', async () => {
+    GlueClientMock.reset()
+    GlueClientMock.clear()
+    GlueClientMock.GetSchemaVersionCommand.mockResolvedValue({
+      VersionNumber: 1,
+      Status: 'AVAILABLE',
+      DataFormat: 'JSON',
+      $metadata: { httpStatusCode: 200, requestId: '12345678901234567890123456789012' },
+      SchemaVersionId: 'c8912285-527d-42de-88ee-e389a763225f',
+      SchemaArn: 'arn:aws:glue:eu-central-1:123456789012:schema/testregistry/JsonSchemaWithId',
+      SchemaDefinition: JSON.stringify(jsonSchemaWithId),
+    })
+
+    // Fresh registry — no cached schema — so the Glue fetch is triggered.
+    // All decode calls are created synchronously before the mock's setTimeout
+    // fires, so every caller reaches `await loadGlueSchema` while the single
+    // shared Promise is still pending and shares it via runningGlueSchemaLoads.
+    const decoder = new GlueSchemaRegistry('testregistry', { region: 'eu-central-1' }, 1)
+    const results = await Promise.all(
+      Array.from({ length: 10 }, () => decoder.decode<JsonTestType>(encodedMessage)),
+    )
+
+    expect(results).toHaveLength(10)
+    results.forEach((r) => expect(r.demo).toBe('Hello world!'))
+    // Confirm only one Glue call was made despite 10 concurrent requests
+    expect(GlueClientMock.GetSchemaVersionCommand).toHaveBeenCalledTimes(1)
+    expect(GlueClientMock.send).toHaveBeenCalledTimes(1)
   })
 })

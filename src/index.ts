@@ -441,6 +441,13 @@ export class GlueSchemaRegistry {
   private async getSchemaForGlueId(id: string): Promise<CachedSchemaInfo> {
     if (this.schemaCache[id]) return this.schemaCache[id]
     const response = await this.loadGlueSchema(id)
+    // Re-check after awaiting: concurrent callers share the same deduplicated
+    // runningGlueSchemaLoads promise, so when it resolves all of them resume in
+    // the microtask queue. The first to run will populate schemaCache; the rest
+    // must return that result instead of calling ajv.compile / avro.Type.forSchema
+    // again — Ajv throws "schema with key or id already exists" on a second
+    // compile of any schema that carries an $id field.
+    if (this.schemaCache[id]) return this.schemaCache[id]
     if (!response.SchemaDefinition) throw new Error('Glue returned undefined schema definition')
     const parsed = JSON.parse(response.SchemaDefinition)
     // Determine schema type from Glue DataFormat, default to AVRO for backward compatibility
