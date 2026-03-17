@@ -413,6 +413,14 @@ export class GlueSchemaRegistry {
 
     if (schemaInfo.type === SchemaType.JSON) {
       const data = JSON.parse(decompressed.toString('utf-8'))
+      if (schemaInfo.validator) {
+        const valid = schemaInfo.validator(data)
+        if (!valid) {
+          throw new Error(
+            `JSON Schema validation failed: ${this.ajv.errorsText(schemaInfo.validator.errors)}`,
+          )
+        }
+      }
       if (consumerschema && !(consumerschema instanceof avro.Type)) {
         // Validate with consumer JSON schema; useDefaults fills in defaults for schema evolution
         const validate = this.getConsumerValidator(consumerschema)
