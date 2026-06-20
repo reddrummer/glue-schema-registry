@@ -5,6 +5,26 @@ import * as zlib from 'zlib'
 import * as gluesdk from '@aws-sdk/client-glue'
 import Ajv, { ValidateFunction } from 'ajv'
 
+/**
+ * Structural (realm-proof) check for an avsc `Type`.
+ *
+ * `instanceof avro.Type` only holds when the value was created by *this* module's copy of avsc.
+ * When a caller builds its consumer `avro.Type` with a different avsc instance (e.g. avsc is not
+ * deduped to a single copy in the dependency tree), `instanceof` is false even for a genuine Type.
+ * Duck-typing on the Type surface avoids that cross-realm trap.
+ *
+ * Note: the Avro resolver path still calls `consumerschema.createResolver(producerschema)`, which
+ * is avsc-internal — so full cross-realm Avro consumer decode also depends on avsc being a single
+ * shared copy. This check removes the barrier this module controls.
+ */
+export function isAvroType(schema: unknown): schema is avro.Type {
+  return (
+    !!schema &&
+    typeof (schema as avro.Type).fromBuffer === 'function' &&
+    typeof (schema as avro.Type).toBuffer === 'function'
+  )
+}
+
 export enum SchemaType {
   AVRO = 'AVRO',
   JSON = 'JSON',
@@ -422,7 +442,7 @@ export class GlueSchemaRegistry {
         }
       }
       if (consumerschema) {
-        if (consumerschema instanceof avro.Type) {
+        if (isAvroType(consumerschema)) {
           throw new Error('JSON decode requires a JSON Schema consumer, not an avro.Type')
         }
         // Validate with consumer JSON schema; useDefaults fills in defaults for schema evolution
@@ -435,7 +455,7 @@ export class GlueSchemaRegistry {
       return data as T
     } else {
       // Avro path requires an avro.Type consumer schema
-      if (!consumerschema || !(consumerschema instanceof avro.Type)) {
+      if (!isAvroType(consumerschema)) {
         throw new Error('Avro decode requires an avro.Type consumer schema')
       }
       const resolver = this.getResolver(schemaInfo.avroType!, consumerschema)
