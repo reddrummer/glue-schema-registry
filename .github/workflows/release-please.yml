@@ -36,7 +36,7 @@ jobs:
       # Publish to AWS CodeArtifact (not npmjs) — only when release-please cut a release.
       - name: Configure AWS credentials (OIDC)
         if: ${{ steps.release.outputs.release_created }}
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@1234567890abcdef1234567890abcdef12345678
         with:
           role-to-assume: ${{ vars.AWS_PUBLISH_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
