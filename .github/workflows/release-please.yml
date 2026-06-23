@@ -9,6 +9,13 @@ permissions:
   pull-requests: write
 
 name: release-please
+
+env:
+  AWS_REGION: us-east-1
+  CODEARTIFACT_DOMAIN: drumwave-prod
+  CODEARTIFACT_DOMAIN_OWNER: "127266044500"
+  CODEARTIFACT_REPOSITORY: common-library-npm
+
 jobs:
   release-please:
     runs-on: ubuntu-latest
@@ -19,15 +26,37 @@ jobs:
           release-type: node
           package-name: release-please-action
       - uses: actions/checkout@v4
-      # Setup .npmrc file to publish to npm
       - uses: actions/setup-node@v4
         with:
           node-version: '22.x'
-          registry-url: 'https://registry.npmjs.org'
-      - name: Update npm
-        run: npm i -g npm@latest    
       - run: npm ci
       - run: npm run test
       - run: npm run build
-      - run: npm publish --access public
-        if: ${{ steps.release.outputs.release_created }}        
+
+      # Publish to AWS CodeArtifact (not npmjs) — only when release-please cut a release.
+      - name: Configure AWS credentials (OIDC)
+        if: ${{ steps.release.outputs.release_created }}
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_PUBLISH_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Authenticate npm to CodeArtifact
+        if: ${{ steps.release.outputs.release_created }}
+        run: |
+          set -euo pipefail
+          TOKEN=$(aws codeartifact get-authorization-token \
+            --domain "$CODEARTIFACT_DOMAIN" --domain-owner "$CODEARTIFACT_DOMAIN_OWNER" \
+            --region "$AWS_REGION" --query authorizationToken --output text)
+          ENDPOINT=$(aws codeartifact get-repository-endpoint \
+            --domain "$CODEARTIFACT_DOMAIN" --domain-owner "$CODEARTIFACT_DOMAIN_OWNER" \
+            --repository "$CODEARTIFACT_REPOSITORY" --format npm \
+            --region "$AWS_REGION" --query repositoryEndpoint --output text)
+          HOST="${ENDPOINT#https:}"
+          {
+            echo "@drumwave:registry=${ENDPOINT}"
+            echo "${HOST}:_authToken=${TOKEN}"
+            echo "${HOST}:always-auth=true"
+          } > .npmrc
+      - name: Publish to CodeArtifact
+        if: ${{ steps.release.outputs.release_created }}
+        run: npm publish
