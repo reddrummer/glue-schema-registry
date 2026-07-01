@@ -22,11 +22,43 @@ jobs:
           release-type: node
           package-name: release-please-action
 
-  # Publish to AWS CodeArtifact via SRE's reusable workflow — only when release-please cut a release.
+  # Publish to AWS CodeArtifact — only when release-please cut a release.
+  # NOTE: Cannot use sre.ci-yay reusable workflow here because this repo is public
+  # and GitHub blocks public repos from calling reusable workflows in private repos.
   publish:
     needs: release-please
     if: ${{ needs.release-please.outputs.release_created }}
-    uses: reddrummer/sre.ci-yay/.github/workflows/publish-node-codeartifact.yaml@main
-    with:
-      sonarqube: false
-    secrets: inherit
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::127266044500:role/reddrummer-github-actions-runner
+          aws-region: us-east-1
+
+      - name: Authenticate npm to CodeArtifact
+        run: |
+          aws codeartifact login --tool npm \
+            --domain drumwave-prod \
+            --domain-owner 127266044500 \
+            --repository common-library-npm \
+            --region us-east-1
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Publish
+        run: npm publish
