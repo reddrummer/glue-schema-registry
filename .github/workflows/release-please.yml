@@ -22,10 +22,11 @@ jobs:
           release-type: node
           package-name: release-please-action
 
-  # Publish to AWS CodeArtifact via SRE's in-house reusable workflow — only when release-please cut a release.
+  # Publish to AWS CodeArtifact via SRE's reusable workflow — only when release-please cut a release.
   publish:
     needs: release-please
     if: ${{ needs.release-please.outputs.release_created }}
-    uses: reddrummer/sre.ci-yay/.github/workflows/publish-node-codeartifact.yaml@945a9ad65932ffca4603e673b509b8028366e8f1 # 0.0.4
+    uses: reddrummer/sre.ci-yay/.github/workflows/publish-node-codeartifact.yaml@main
     with:
       sonarqube: false
+    secrets: inherit
