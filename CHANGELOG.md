@@ -1,5 +1,34 @@
 # Changelog
 
+## [5.0.0](https://github.com/reddrummer/glue-schema-registry/compare/v4.0.0...v5.0.0) (2026-07-01)
+
+
+### ⚠ BREAKING CHANGES
+
+* make GlueSchemaRegistry multi-schema by moving generics to encode/decode
+* throttle glue requests ([#574](https://github.com/reddrummer/glue-schema-registry/issues/574))
+
+### Features
+
+* add exception property to AnalyzeMessageResult for better error handling ([1558699](https://github.com/reddrummer/glue-schema-registry/commit/15586996d47b60c46f76720748e1a2dfd1a3cc1b))
+* add JSON Schema support with ajv validation and schema evolution ([3f3f292](https://github.com/reddrummer/glue-schema-registry/commit/3f3f292e0b58d343a9b2548b50f7d604b08675fe))
+* make GlueSchemaRegistry multi-schema by moving generics to encode/decode ([02ce53e](https://github.com/reddrummer/glue-schema-registry/commit/02ce53ed302d06216121f4eb32311e490d27e9ad))
+* throttle glue requests ([#574](https://github.com/reddrummer/glue-schema-registry/issues/574)) ([3299c61](https://github.com/reddrummer/glue-schema-registry/commit/3299c61c9a14048c911de20d48d0dbd9716adbb6))
+* use zlib from stdlib ([d130069](https://github.com/reddrummer/glue-schema-registry/commit/d130069fb0943eba83dd4636da652cad11eb2e5c))
+
+
+### Bug Fixes
+
+* add missing jsdoc for createSchema ([45b73e1](https://github.com/reddrummer/glue-schema-registry/commit/45b73e12230219bd332218e59a09212eaa7d7840))
+* **build:** emit dist/esm/package.json with type:module for ESM boundary ([40c22c5](https://github.com/reddrummer/glue-schema-registry/commit/40c22c58a42cfcd1bdcbedff204ba90ece6d1f74))
+* deps conflict ([ef9896b](https://github.com/reddrummer/glue-schema-registry/commit/ef9896b315e1b11f514f49c3e89545fc93fb3d45))
+* encode uses validated payload, decode checks validation result, add negative test ([883f769](https://github.com/reddrummer/glue-schema-registry/commit/883f7697e9967de2159aa755c4d287435598d331))
+* fix pipeline permissions ([7ed5d20](https://github.com/reddrummer/glue-schema-registry/commit/7ed5d20f8df76cae240c1e9b55d2a22b8fe2d84f))
+* re-check schemaCache after awaiting loadGlueSchema to prevent duplicate Ajv $id errors ([6e89640](https://github.com/reddrummer/glue-schema-registry/commit/6e89640048d5cac2d048dee3c6ab22f7e9e44e85))
+* **registry:** throw on avro.Type consumer schema passed to JSON decode ([22b0d6e](https://github.com/reddrummer/glue-schema-registry/commit/22b0d6e57c480a31a33c3e4bc153b3648a42a509))
+* **registry:** use separate Ajv instance for consumer schema validation ([cbdb211](https://github.com/reddrummer/glue-schema-registry/commit/cbdb2115c1a09a007fd73658d731053c9fb9f161))
+* **registry:** validate decoded JSON against producer schema in decode() ([c57fc03](https://github.com/reddrummer/glue-schema-registry/commit/c57fc032eaf00a22c6310ac017df21c9464d7e36))
+
 ## [4.0.0](https://github.com/meinestadt/glue-schema-registry/compare/v3.0.1...v4.0.0) (2025-11-27)
 
 

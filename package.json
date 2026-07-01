@@ -1,6 +1,6 @@
 {
   "name": "@drumwave/glue-schema-registry",
-  "version": "4.0.0",
+  "version": "5.0.0",
   "description": "SerDe library to interact with the AWS Glue Schema Registry. Encode and decode messages with Avro and JSON schema using the AWS wire format.",
   "author": "Drumwave",
   "private": false,
