@@ -9,25 +9,23 @@ permissions:
   pull-requests: write
 
 name: release-please
+
 jobs:
   release-please:
     runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
     steps:
       - uses: google-github-actions/release-please-action@v3
         id: release
         with:
           release-type: node
           package-name: release-please-action
-      - uses: actions/checkout@v4
-      # Setup .npmrc file to publish to npm
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22.x'
-          registry-url: 'https://registry.npmjs.org'
-      - name: Update npm
-        run: npm i -g npm@latest    
-      - run: npm ci
-      - run: npm run test
-      - run: npm run build
-      - run: npm publish --access public
-        if: ${{ steps.release.outputs.release_created }}        
+
+  # Publish to AWS CodeArtifact via SRE's in-house reusable workflow — only when release-please cut a release.
+  publish:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created }}
+    uses: reddrummer/sre.ci-yay/.github/workflows/publish-node-codeartifact.yaml@945a9ad65932ffca4603e673b509b8028366e8f1 # 0.0.4
+    with:
+      sonarqube: false
