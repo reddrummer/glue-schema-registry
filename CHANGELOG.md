@@ -1,5 +1,12 @@
 # Changelog
 
+## [5.0.1](https://github.com/reddrummer/glue-schema-registry/compare/v5.0.0...v5.0.1) (2026-07-01)
+
+
+### Bug Fixes
+
+* **decode:** use structural avro.Type check instead of instanceof ([#7](https://github.com/reddrummer/glue-schema-registry/issues/7)) ([37f4c96](https://github.com/reddrummer/glue-schema-registry/commit/37f4c963155da4d546bf98f5521066bc843e62f7))
+
 ## [5.0.0](https://github.com/reddrummer/glue-schema-registry/compare/v4.0.0...v5.0.0) (2026-07-01)
 
 
