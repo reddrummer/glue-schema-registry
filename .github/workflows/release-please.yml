@@ -4,7 +4,6 @@ on:
       - main
 
 permissions:
-  id-token: write
   contents: write
   pull-requests: write
 
@@ -13,20 +12,9 @@ name: release-please
 jobs:
   release-please:
     runs-on: ubuntu-latest
-    outputs:
-      release_created: ${{ steps.release.outputs.release_created }}
     steps:
       - uses: google-github-actions/release-please-action@v3
         id: release
         with:
           release-type: node
           package-name: release-please-action
-
-  # Publish to AWS CodeArtifact via SRE's reusable workflow — only when release-please cut a release.
-  publish:
-    needs: release-please
-    if: ${{ needs.release-please.outputs.release_created }}
-    uses: reddrummer/sre.ci-yay/.github/workflows/publish-node-codeartifact.yaml@main
-    with:
-      sonarqube: false
-    secrets: inherit

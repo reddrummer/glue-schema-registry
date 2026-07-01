@@ -1,0 +1,52 @@
+# Publish to AWS CodeArtifact on every GitHub Release.
+#
+# Triggers automatically when release-please publishes a GitHub Release,
+# and can be re-run manually via workflow_dispatch if a publish fails.
+#
+# NOTE: Cannot delegate to sre.ci-yay reusable workflow because this repo is
+# public — GitHub blocks public repos from calling workflows in private repos.
+
+name: Publish to CodeArtifact
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch: {}
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::127266044500:role/reddrummer-github-actions-runner
+          aws-region: us-east-1
+
+      - name: Authenticate npm to CodeArtifact
+        run: |
+          aws codeartifact login --tool npm \
+            --domain drumwave-prod \
+            --domain-owner 127266044500 \
+            --repository common-library-npm \
+            --region us-east-1
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Publish
+        run: npm publish
